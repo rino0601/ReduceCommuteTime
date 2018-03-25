@@ -24,7 +24,7 @@ exports.handler = function (event, context) {
     fetch(apiUrl).then(value => value.json()).then((data) => {
         const message = data.message;
         if (!message.result) {
-            context.done("no result. skip it.");
+            context.done(null, "no result. skip it.");
             return;
         }
         const {updateDate, routeId, busLocationList} = message.result;
@@ -49,7 +49,7 @@ exports.handler = function (event, context) {
             TableName: "lambda_polling_bus_refined",
             Item: data,
         }))).then(values => {
-            context.done("Done. new bus recodes ("+values.length+") are added.");
+            context.done(null, "Done. new bus recodes ("+values.length+") are added.");
             return undefined;
         });
     }).catch(reason => {
