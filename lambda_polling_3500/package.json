@@ -1,6 +1,6 @@
 {
   "name": "lambda_polling_3500",
-  "version": "0.0.1",
+  "version": "0.1.0",
   "description": "This is my first attempt using aws lambda. It request Naver Bus api every minutes and store that result into DynamoDB",
   "main": "lambda_polling.js",
   "scripts": {
@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "dynamodb-doc": "^1.0.0",
+    "moment": "^2.21.0",
     "node-fetch": "^2.1.1",
     "uuid": "latest"
   }
