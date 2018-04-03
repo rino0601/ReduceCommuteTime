@@ -15,6 +15,7 @@
   },
   "dependencies": {
     "dynamodb-doc": "^1.0.0",
+    "moment": "^2.21.0",
     "node-fetch": "^2.1.1",
     "uuid": "^3.2.1"
   }
