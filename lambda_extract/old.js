@@ -29,14 +29,6 @@ const scanPromise = (params) => {
     });
 };
 
-const queryPromise = (params) => {
-    return new Promise((resolve, reject) => {
-        ddb.query(params, (err, data) => {
-            err ? reject(err) : resolve(data);
-        })
-    })
-};
-
 const fullScanReculsive = (params, chain, count, scannedCount) => {
     return scanPromise(params).then((data) => {
         data.Items.map(item => {
@@ -92,33 +84,35 @@ const putItRecursive = (array, index) => {
     }));
 };
 
-const epoch = 1522019222000;
-const typeSizes = {
-    "undefined": () => 0,
-    "boolean": () => 4,
-    "number": () => 8,
-    "string": item => 2 * item.length,
-    "object": item => Object
-        .keys(item || {})
-        .reduce((total, key) => sizeOf(key) + sizeOf(item[key]) + total, 0)
-};
-
-const sizeOf = value => typeSizes[typeof value](value);
 exports.handler = function (event, context) {
     const params = {
-        TableName: 'lambda_polling_bus_refined',
-        IndexName: "plateNo-epochTime-index",
-        // KeyConditionExpression: "plateNo = :plateNo and epochTime between :epoch1 and :epoch2",
-        // KeyConditionExpression: "epochTime between :epoch1 and :epoch2",
-        // ExpressionAttributeValues: {
-        //     // ":plateNo": "경기77바1238",
-        //     ":epoch1": epoch,
-        //     ":epoch2": epoch + (1000 * 60 * 60 * 2),
-        // },
+        TableName: 'lambda_polling_bus_raw',
+        FilterExpression: "attribute_exists(message.#r)",
+        ExpressionAttributeNames: {
+            "#r": "result"
+        },
     };
-    scanPromise(params).then(data => {
-        console.log(sizeOf(data));
-        delete data.Items;
-        console.log(data);
-    })
+    const chain = [];
+    fullScanReculsive(params, chain, 0, 0).then(counts => {
+        const noc = chain.length;
+        const filtered = chain.filter(ebus => {
+            return ebus.epochTime < 1522019222000;
+        });
+        const nof = filtered.length;
+        console.log(nof + "/" + noc + " - " + counts[0] + "/" + counts[1]);
+        return filtered;
+    }).then(filtered => {
+        const range = n => [...Array(n).keys()];
+        const mod = Math.floor(filtered.length / 100);
+        const ticks = range(mod).map(n => []);
+        for (let i = 0; i < filtered.length; i++) {
+            ticks[i % mod].push(filtered[i]);
+        }
+        return putItRecursive(ticks, 0);
+    }).then(() => {
+        context.done(null, "Finally.");
+    }).catch(reason => {
+        console.log(reason);
+        context.fail('unable to fetch bus api at this time');
+    });
 };
