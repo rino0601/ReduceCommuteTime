@@ -4,6 +4,7 @@ const AWS = require('aws-sdk');
 const DOC = require('dynamodb-doc');
 const ddb = new DOC.DynamoDB();
 const moment = require('moment');
+const models = require('./models');
 
 const putItemPromise = (params) => {
     return new Promise((resolve, reject) => {
@@ -92,7 +93,8 @@ const putItRecursive = (array, index) => {
     }));
 };
 
-const epoch = 1522019222000;
+// const epoch = 1522019222000;
+const epoch = 1522920222000;
 const typeSizes = {
     "undefined": () => 0,
     "boolean": () => 4,
@@ -108,17 +110,30 @@ exports.handler = function (event, context) {
     const params = {
         TableName: 'lambda_polling_bus_refined',
         IndexName: "plateNo-epochTime-index",
-        // KeyConditionExpression: "plateNo = :plateNo and epochTime between :epoch1 and :epoch2",
-        // KeyConditionExpression: "epochTime between :epoch1 and :epoch2",
-        // ExpressionAttributeValues: {
-        //     // ":plateNo": "경기77바1238",
-        //     ":epoch1": epoch,
-        //     ":epoch2": epoch + (1000 * 60 * 60 * 2),
-        // },
+        KeyConditionExpression: "plateNo = :plateNo and epochTime between :epoch1 and :epoch2",
+        ExpressionAttributeValues: {
+            ":plateNo": "경기77바1238",
+            ":epoch1": epoch,
+            ":epoch2": epoch + (1000 * 60 * 60 * 2),
+        },
+        Limit: 2,
     };
-    scanPromise(params).then(data => {
-        console.log(sizeOf(data));
-        delete data.Items;
-        console.log(data);
-    })
+    queryPromise(params).then(data => {
+        return data.Items.map(item => {
+            const epochTime = new Date(item.epochTime);
+            const value = String(item.upperUpdateDate - item.offset);
+            console.log(value);
+            const collectedDate = moment(value, "YYYYMMDDHHmmss").utc().toDate();
+            item.epochTime = epochTime;
+            item.collectedDate = collectedDate;
+            item.upperUpdateDate = moment(item.upperUpdateDate, "YYYYMMDDHHmmss").utc().toDate();
+            return item;
+        });
+    }).then(items => {
+        console.log(items);
+        return;
+        return models.sequelize.transaction(t => {
+            return Promise.all(items.map(item => models.BusData.create(item, {transaction: t})));
+        });
+    });
 };
