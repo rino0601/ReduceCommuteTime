@@ -3,8 +3,10 @@ const uuidv4 = require('uuid/v4');
 const AWS = require('aws-sdk');
 const DOC = require('dynamodb-doc');
 const ddb = new DOC.DynamoDB();
-const moment = require('moment');
+const moment = require('moment-timezone');
 const models = require('./models');
+
+moment.tz.setDefault("Asia/Seoul");
 
 const putItemPromise = (params) => {
     return new Promise((resolve, reject) => {
@@ -93,47 +95,62 @@ const putItRecursive = (array, index) => {
     }));
 };
 
-// const epoch = 1522019222000;
-const epoch = 1522920222000;
-const typeSizes = {
-    "undefined": () => 0,
-    "boolean": () => 4,
-    "number": () => 8,
-    "string": item => 2 * item.length,
-    "object": item => Object
-        .keys(item || {})
-        .reduce((total, key) => sizeOf(key) + sizeOf(item[key]) + total, 0)
-};
+const dbSync = models.sequelize.sync();
 
-const sizeOf = value => typeSizes[typeof value](value);
+
+// const epoch = 1523620740000;
+const epoch = 1523621000000;
+/**
+ * NOTE.
+ * epoch를 GMT 로 변환해야 원래 기대했던 시간이 나온다.
+ * 변환할 때, YYYYDDhhmmss 로 했었는데, 다행히 epoch에는 손실이 없었으나, 도로 복호(?) 할때는 YYYYDDHHmmss로 해야 한다.(GMT)
+ */
 exports.handler = function (event, context) {
-    const params = {
-        TableName: 'lambda_polling_bus_refined',
-        IndexName: "plateNo-epochTime-index",
-        KeyConditionExpression: "plateNo = :plateNo and epochTime between :epoch1 and :epoch2",
-        ExpressionAttributeValues: {
-            ":plateNo": "경기77바1238",
-            ":epoch1": epoch,
-            ":epoch2": epoch + (1000 * 60 * 60 * 2),
-        },
-        Limit: 2,
-    };
-    queryPromise(params).then(data => {
+    dbSync.then((() => {
+        return {
+            TableName: 'lambda_polling_bus_refined',
+            IndexName: "routeId-epochTime-index",
+            KeyConditionExpression: "routeId = :routeId and epochTime between :epoch1 and :epoch2",
+            ExpressionAttributeValues: {
+                ":routeId": 10596,
+                ":epoch1": epoch,
+                ":epoch2": epoch + (1000 * 60 * 3),
+            },
+        };
+    })).then(params => queryPromise(params)).then(data => {
         return data.Items.map(item => {
-            const epochTime = new Date(item.epochTime);
+            return item;
+            const epochTime = moment(item.epochTime).toDate();
             const value = String(item.upperUpdateDate - item.offset);
             console.log(value);
-            const collectedDate = moment(value, "YYYYMMDDHHmmss").utc().toDate();
+            const collectedDate = moment(value, "YYYYMMDDHHmmss").toDate();
             item.epochTime = epochTime;
             item.collectedDate = collectedDate;
-            item.upperUpdateDate = moment(item.upperUpdateDate, "YYYYMMDDHHmmss").utc().toDate();
+            item.upperUpdateDate = moment(item.upperUpdateDate, "YYYYMMDDHHmmss").toDate();
             return item;
         });
     }).then(items => {
-        console.log(items);
-        return;
         return models.sequelize.transaction(t => {
-            return Promise.all(items.map(item => models.BusData.create(item, {transaction: t})));
+            return Promise.all(items.map(item => {
+                const {plateNo} = item;
+                return models.Bus.findOrCreate({
+                    where: {
+                        plateNo,
+                    },
+                    defaults: {
+                        "plateNo": plateNo,
+                        "documentId": uuidv4(),
+                        "description": plateNo
+                    },
+                    transaction: t,
+                }).then((model, created) => {
+                    return models.BusData.create(item, {transaction: t});
+                });
+            }));
         });
+    }).then(() => {
+        context.done(null, "Done any");
+    }).catch(e => {
+        context.done(e, "oops");
     });
 };
