@@ -15,6 +15,7 @@
     "sequelize-cli": "^4.0.0"
   },
   "dependencies": {
+    "dataloader": "^1.4.0",
     "dynamodb-doc": "^1.0.0",
     "moment": "^2.21.0",
     "moment-timezone": "^0.5.14",

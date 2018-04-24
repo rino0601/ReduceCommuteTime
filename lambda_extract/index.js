@@ -6,8 +6,6 @@ const ddb = new DOC.DynamoDB();
 const moment = require('moment-timezone');
 const models = require('./models');
 
-moment.tz.setDefault("Asia/Seoul");
-
 const putItemPromise = (params) => {
     return new Promise((resolve, reject) => {
         ddb.putItem(params, (err, data) => {
@@ -97,7 +95,6 @@ const putItRecursive = (array, index) => {
 
 const dbSync = models.sequelize.sync();
 
-
 // const epoch = 1523620740000;
 const epoch = 1523621000000;
 /**
@@ -105,52 +102,76 @@ const epoch = 1523621000000;
  * epoch를 GMT 로 변환해야 원래 기대했던 시간이 나온다.
  * 변환할 때, YYYYDDhhmmss 로 했었는데, 다행히 epoch에는 손실이 없었으나, 도로 복호(?) 할때는 YYYYDDHHmmss로 해야 한다.(GMT)
  */
-exports.handler = function (event, context) {
-    dbSync.then((() => {
-        return {
-            TableName: 'lambda_polling_bus_refined',
-            IndexName: "routeId-epochTime-index",
-            KeyConditionExpression: "routeId = :routeId and epochTime between :epoch1 and :epoch2",
-            ExpressionAttributeValues: {
-                ":routeId": 10596,
-                ":epoch1": epoch,
-                ":epoch2": epoch + (1000 * 60 * 3),
-            },
-        };
-    })).then(params => queryPromise(params)).then(data => {
-        return data.Items.map(item => {
-            return item;
-            const epochTime = moment(item.epochTime).toDate();
-            const value = String(item.upperUpdateDate - item.offset);
-            console.log(value);
-            const collectedDate = moment(value, "YYYYMMDDHHmmss").toDate();
-            item.epochTime = epochTime;
-            item.collectedDate = collectedDate;
-            item.upperUpdateDate = moment(item.upperUpdateDate, "YYYYMMDDHHmmss").toDate();
-            return item;
-        });
-    }).then(items => {
-        return models.sequelize.transaction(t => {
-            return Promise.all(items.map(item => {
-                const {plateNo} = item;
-                return models.Bus.findOrCreate({
-                    where: {
-                        plateNo,
-                    },
-                    defaults: {
-                        "plateNo": plateNo,
-                        "documentId": uuidv4(),
-                        "description": plateNo
-                    },
-                    transaction: t,
-                }).then((model, created) => {
-                    return models.BusData.create(item, {transaction: t});
-                });
+exports.handler = (event, context) => {
+    // return dbSync.then((() => {
+    //     return {
+    //         TableName: 'lambda_polling_bus_refined',
+    //         IndexName: "routeId-epochTime-index",
+    //         KeyConditionExpression: "routeId = :routeId and epochTime between :epoch1 and :epoch2",
+    //         ExpressionAttributeValues: {
+    //             ":routeId": 10596,
+    //             ":epoch1": epoch,
+    //             ":epoch2": epoch + (1000 * 60 * 60 * 48),
+    //         },
+    //     };
+    // })).then(params => queryPromise(params)).then(data => {
+    //     return data.Items.map(item => {
+    //         const value = String(item.upperUpdateDate - item.offset);
+    //         item.reportedDate = moment.utc(value, "YYYYMMDDHHmmss").toDate();
+    //         item.collectedDate = moment.utc(item.upperUpdateDate, "YYYYMMDDHHmmss").toDate();
+    //         return item;
+    //     });
+    // }).then(items => {
+    //     return models.sequelize.transaction(t0 => {
+    //         return Promise.all(items.map(item => {
+    //             const {plateNo} = item;
+    //             return models.Bus.findOrCreate({
+    //                 where: {
+    //                     plateNo,
+    //                 },
+    //                 defaults: {
+    //                     "plateNo": plateNo,
+    //                     "documentId": uuidv4(),
+    //                     "description": plateNo
+    //                 },
+    //                 transaction: t0,
+    //             }).then(([model, created]) => {
+    //                 return models.BusData.create(item, {transaction: t0});
+    //             });
+    //         }));
+    //     }).then(ignored => {
+    //
+    //     });
+    // });
+
+    return models.sequelize.transaction(t1 => {
+        return models.Bus.findAll({
+            include: [{
+                model: models.BusData,
+                order: [
+                    [{model: models.BusData}, `collectedDate`, 'ASC'],
+                    [{model: models.BusData}, `stationSeq`, 'ASC'],
+                ]
+            }],
+            transaction: t1,
+        }).then(buses => {
+            return Promise.all(buses.map(bus => {
+                const groups=[];
+                bus.BusData.reduce((prev, curr) => {
+                    if(prev > curr.stationSeq) {
+                        groups.push([]);
+                    }
+                    groups[groups.length-1].push(curr.stationSeq);
+                    return curr.stationSeq;
+                }, Infinity);
+                console.log(groups);
+                throw "asdfasdfasdfasdf"; // TODO. 이걸 정리 해야 시간을 재던가 할텐데, 내가 원하는 느낌으로 되지가 않네...??  order by가 안되는 느낌임. 찾아 볼 것.
             }));
         });
     }).then(() => {
         context.done(null, "Done any");
     }).catch(e => {
+        console.log(e);
         context.done(e, "oops");
     });
 };
