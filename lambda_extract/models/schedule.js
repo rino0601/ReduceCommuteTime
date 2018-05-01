@@ -5,6 +5,7 @@ module.exports = (sequelize, DataTypes) => {
             type: DataTypes.UUID,
             primaryKey: true,
         },
+        partition: DataTypes.STRING,
         departAt: DataTypes.DATE
     }, {});
     Schedule.associate = function (models) {

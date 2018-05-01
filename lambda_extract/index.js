@@ -1,4 +1,3 @@
-const fetch = require('node-fetch');
 const uuidv4 = require('uuid/v4');
 const AWS = require('aws-sdk');
 const DOC = require('dynamodb-doc');
@@ -38,38 +37,17 @@ const queryPromise = (params) => {
     })
 };
 
-const fullScanReculsive = (params, chain, count, scannedCount) => {
-    return scanPromise(params).then((data) => {
-        data.Items.map(item => {
-            const {updateDate, routeId, busLocationList} = item.message.result;
-            const upperUpdateDate = updateDate;
-            const epochTime = moment(upperUpdateDate, "YYYYMMDDhhmmss").valueOf();
-            const dataList = busLocationList.map(bus => {
-                const {plateNo, remainSeat, stateCd, stationId, stationSeq, updateDate} = bus;
-                return {
-                    documentId: uuidv4(),
-                    epochTime,
-                    routeId,
-                    plateNo,
-                    upperUpdateDate,
-                    remainSeat,
-                    stateCd,
-                    stationId,
-                    stationSeq,
-                    offset: upperUpdateDate - updateDate
-                };
-            });
-            chain.push(...dataList);
-        });
-
+const queryRecursive = (params, chain, count, scannedCount) => {
+    return queryPromise(params).then((data) => {
+        chain.push(...data.Items);
         const countUpTo = count + data.Count;
         const scannedCountUpTo = scannedCount + data.ScannedCount;
         if (typeof data.LastEvaluatedKey !== "undefined") {
-            console.log("(" + countUpTo + "/" + scannedCountUpTo + ")Scanning for more...");
+            console.log("(" + countUpTo + "/" + scannedCountUpTo + ") Querying for more...");
             params.ExclusiveStartKey = data.LastEvaluatedKey;
-            return fullScanReculsive(params, chain, countUpTo, scannedCountUpTo);
+            return queryRecursive(params, chain, countUpTo, scannedCountUpTo);
         }
-        return [countUpTo, scannedCountUpTo];
+        return chain;
     })
 };
 
@@ -95,78 +73,98 @@ const putItRecursive = (array, index) => {
 
 const dbSync = models.sequelize.sync();
 
-// const epoch = 1523620740000;
-const epoch = 1523621000000;
-/**
- * NOTE.
- * epoch를 GMT 로 변환해야 원래 기대했던 시간이 나온다.
- * 변환할 때, YYYYDDhhmmss 로 했었는데, 다행히 epoch에는 손실이 없었으나, 도로 복호(?) 할때는 YYYYDDHHmmss로 해야 한다.(GMT)
- */
-exports.handler = (event, context) => {
-    // return dbSync.then((() => {
-    //     return {
-    //         TableName: 'lambda_polling_bus_refined',
-    //         IndexName: "routeId-epochTime-index",
-    //         KeyConditionExpression: "routeId = :routeId and epochTime between :epoch1 and :epoch2",
-    //         ExpressionAttributeValues: {
-    //             ":routeId": 10596,
-    //             ":epoch1": epoch,
-    //             ":epoch2": epoch + (1000 * 60 * 60 * 48),
-    //         },
-    //     };
-    // })).then(params => queryPromise(params)).then(data => {
-    //     return data.Items.map(item => {
-    //         const value = String(item.upperUpdateDate - item.offset);
-    //         item.reportedDate = moment.utc(value, "YYYYMMDDHHmmss").toDate();
-    //         item.collectedDate = moment.utc(item.upperUpdateDate, "YYYYMMDDHHmmss").toDate();
-    //         return item;
-    //     });
-    // }).then(items => {
-    //     return models.sequelize.transaction(t0 => {
-    //         return Promise.all(items.map(item => {
-    //             const {plateNo} = item;
-    //             return models.Bus.findOrCreate({
-    //                 where: {
-    //                     plateNo,
-    //                 },
-    //                 defaults: {
-    //                     "plateNo": plateNo,
-    //                     "documentId": uuidv4(),
-    //                     "description": plateNo
-    //                 },
-    //                 transaction: t0,
-    //             }).then(([model, created]) => {
-    //                 return models.BusData.create(item, {transaction: t0});
-    //             });
-    //         }));
-    //     }).then(ignored => {
-    //
-    //     });
-    // });
-
-    return models.sequelize.transaction(t1 => {
-        return models.Bus.findAll({
-            include: [{
-                model: models.BusData,
-                order: [
-                    [{model: models.BusData}, `collectedDate`, 'ASC'],
-                    [{model: models.BusData}, `stationSeq`, 'ASC'],
-                ]
-            }],
-            transaction: t1,
-        }).then(buses => {
-            return Promise.all(buses.map(bus => {
-                const groups=[];
-                bus.BusData.reduce((prev, curr) => {
-                    if(prev > curr.stationSeq) {
-                        groups.push([]);
-                    }
-                    groups[groups.length-1].push(curr.stationSeq);
-                    return curr.stationSeq;
-                }, Infinity);
-                console.log(groups);
-                throw "asdfasdfasdfasdf"; // TODO. 이걸 정리 해야 시간을 재던가 할텐데, 내가 원하는 느낌으로 되지가 않네...??  order by가 안되는 느낌임. 찾아 볼 것.
+const mainHandler = (event, context) => {
+    const partition = "20180425";
+    return dbSync.then((() => {
+        return {
+            TableName: 'lambda_polling_bus_refined',
+            IndexName: "routeId-upperUpdateDate-index",
+            KeyConditionExpression: "routeId = :routeId and upperUpdateDate between :from and :to",
+            ExpressionAttributeValues: {
+                ":routeId": 10596,
+                ":from": partition + "030000",
+                ":to": "20180426030000",
+            },
+        };
+    })).then(params => queryRecursive(params, [], 0, 0)).then(items => {
+        return items.map(item => {
+            const value = String(item.upperUpdateDate - item.offset);
+            item.reportedDate = moment.utc(value, "YYYYMMDDHHmmss").toDate();
+            item.collectedDate = moment.utc(item.upperUpdateDate, "YYYYMMDDHHmmss").toDate();
+            return item;
+        });
+    }).then(items => {
+        return models.sequelize.transaction(t0 => {
+            return Promise.all(items.map(item => {
+                const {plateNo} = item;
+                return models.Bus.findOrCreate({
+                    where: {
+                        plateNo,
+                    },
+                    defaults: {
+                        "plateNo": plateNo,
+                        "documentId": uuidv4(),
+                        "description": plateNo
+                    },
+                    transaction: t0,
+                }).then(() => {
+                    return models.BusData.findOrCreate({
+                        where: {
+                            documentId: item.documentId,
+                        },
+                        defaults: item,
+                        transaction: t0,
+                    });
+                });
             }));
+        });
+    }).then(() => {
+        return models.sequelize.transaction(t1 => {
+            return models.Schedule.destroy({
+                where: {
+                    partition,
+                }
+            }).then(() => {
+                return models.Bus.findAll({
+                    include: [{
+                        model: models.BusData,
+                    }],
+                    transaction: t1,
+                }).then(buses => { // sequelize의 정렬 기능을 쓰는 법을 모르겠다 + 믿을 수 없다. 따라서 인메모리 소팅하기로,  따라서 buses 는 정렬 안된 group by 만 한 데이터.
+                    return Promise.all(buses.map(bus => {
+                        const groups = [];
+                        bus.BusData.sort((a, b) => {
+                            return a.upperUpdateDate - b.upperUpdateDate;
+                        }).reduce((prev, curr) => {
+                            if (prev > curr.stationSeq) {
+                                groups.push([]);
+                            }
+                            groups[groups.length - 1].push(curr);
+                            return curr.stationSeq;
+                        }, Infinity);
+                        return groups;
+                    }).reduce((prev, curr) => {
+                        prev.push(...curr);
+                        return prev;
+                    }, []).map((data) => {
+                        return models.Schedule.create({
+                            documentId: uuidv4(),
+                            departAt: data[0].reportedDate,
+                            partition: partition,
+                        }, {
+                            transaction: t1,
+                        }).then(schedule => {
+                            return Promise.all(data.map(busData => {
+                                busData.updateAttributes({
+                                    ScheduleDocumentId: schedule.documentId,
+                                }, {
+                                    transaction: t1,
+                                })
+                            }));
+                        });
+                    }));
+                });
+            });
         });
     }).then(() => {
         context.done(null, "Done any");
@@ -175,3 +173,26 @@ exports.handler = (event, context) => {
         context.done(e, "oops");
     });
 };
+
+exports.handler = mainHandler;
+// exports.handler = (event, context) => {
+//     dbSync.then((() => {
+//         return {
+//             TableName: 'lambda_polling_bus_refined',
+//             IndexName: "routeId-upperUpdateDate-index",
+//             KeyConditionExpression: "routeId = :routeId and upperUpdateDate between :from and :to",
+//             ExpressionAttributeValues: {
+//                 ":routeId": 10596,
+//                 ":from": "20180425030000",
+//                 ":to": "20180426030000",
+//             },
+//         };
+//     })).then(params => queryRecursive(params, [], 0, 0)).then(items => {
+//         console.log(items[0], items.length);
+//     }).then(() => {
+//         context.done(null, "Done any");
+//     }).catch(e => {
+//         console.log(e);
+//         context.done(e, "oops");
+//     });
+// };

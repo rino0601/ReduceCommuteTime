@@ -4,7 +4,15 @@
     "password": null,
     "database": "database_development",
     "host": "127.0.0.1",
-    "dialect": "mysql"
+    "dialect": "mysql",
+    "pool": {
+      "max": 150,
+      "min": 0,
+      "idle": 50000,
+      "acquire": 50000,
+      "evict": 100000,
+      "handleDisconnects": true
+    }
   },
   "test": {
     "username": "root",
