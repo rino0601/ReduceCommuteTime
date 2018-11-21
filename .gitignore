@@ -160,9 +160,6 @@ typings/
 # Yarn Integrity file
 .yarn-integrity
 
-# dotenv environment variables file
-.env
-
 # next.js build output
 .next
 ### macOS template
@@ -192,5 +189,3 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
-
-.idea
