@@ -13,6 +13,7 @@ Welcome to ReduceCommuteTime's documentation!
    user_guide/index
    contribute/index
    qna
+   posts/index
 
 
 
